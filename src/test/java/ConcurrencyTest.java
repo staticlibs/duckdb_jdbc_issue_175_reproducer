@@ -25,7 +25,7 @@ public class ConcurrencyTest {
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
         monitor();
-        TimeUnit.SECONDS.sleep(1000);
+        TimeUnit.SECONDS.sleep(10000);
     }
 
     void monitor() {
