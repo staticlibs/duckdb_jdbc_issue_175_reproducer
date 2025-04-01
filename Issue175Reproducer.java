@@ -1,5 +1,3 @@
-import org.junit.jupiter.api.Test;
-
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -7,15 +5,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class ConcurrencyTest {
+public class Issue175Reproducer {
 
-    AtomicLong writeCount = new AtomicLong(0);
+    static final AtomicLong writeCount = new AtomicLong(0);
 
-    @Test
-    void concurrentReadWrite() throws Exception {
+    public static void main(String[] args) throws Exception {
         int numShards = 3;
-        int numRows = 1000000;
-        int numTreads = 10;
+        int numRows = 100000;
+        int numTreads = 2;
 
         TestDataSource dataSource = new TestDataSource(numTreads);
         setupShards(dataSource, numShards, numRows);
@@ -24,7 +21,7 @@ public class ConcurrencyTest {
         TimeUnit.SECONDS.sleep(10000);
     }
 
-    void monitor() {
+    static void monitor() {
         new Thread(() -> {
             while (true) {
                 try {
@@ -37,7 +34,7 @@ public class ConcurrencyTest {
         }).start();
     }
 
-    void concurrentWrite(TestDataSource dataSource,
+    static void concurrentWrite(TestDataSource dataSource,
                          int numShards,
                          int numThreads,
                          int numRows) {
@@ -64,7 +61,7 @@ public class ConcurrencyTest {
         }
     }
 
-    int getNext(AtomicInteger integer, int max) {
+    static int getNext(AtomicInteger integer, int max) {
         if (integer.get() >= max) {
             synchronized (integer) {
                 if (integer.get() >= max) {
@@ -76,7 +73,7 @@ public class ConcurrencyTest {
         return integer.incrementAndGet();
     }
 
-    void setupShards(TestDataSource dataSource,
+    static void setupShards(TestDataSource dataSource,
                      int numShards,
                      int numRows) throws Exception {
         Connection connection = dataSource.getConnection();
@@ -90,7 +87,7 @@ public class ConcurrencyTest {
         dataSource.returnConnection(connection);
     }
 
-    void executeQuery(Connection connection, String query) throws Exception {
+    static void executeQuery(Connection connection, String query) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(query)) {
             statement.execute();
         }
