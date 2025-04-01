@@ -1,10 +1,7 @@
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.Test;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.util.Random;
+import java.sql.*;
+import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -16,12 +13,11 @@ public class ConcurrencyTest {
 
     @Test
     void concurrentReadWrite() throws Exception {
-        HikariDataSource dataSource = createDataSource();
-
         int numShards = 3;
         int numRows = 1000000;
         int numTreads = 10;
 
+        TestDataSource dataSource = new TestDataSource(numTreads);
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
         monitor();
@@ -41,7 +37,7 @@ public class ConcurrencyTest {
         }).start();
     }
 
-    void concurrentWrite(HikariDataSource dataSource,
+    void concurrentWrite(TestDataSource dataSource,
                          int numShards,
                          int numThreads,
                          int numRows) {
@@ -51,15 +47,17 @@ public class ConcurrencyTest {
         for (int i = 0; i < numThreads; i++) {
             executorService.submit(() -> {
                 while (true) {
-                    try (Connection connection = dataSource.getConnection()) {
+                    Connection connection = dataSource.getConnection();
+                    try  {
                         int shardId = random.nextInt(numShards) % numShards;
-                        executeQuery(connection, "use shard" + shardId);
                         int rowId = getNext(atomicInteger, numRows);
-                        executeQuery(connection, "update test set amount = amount + 1 where id = " + rowId);
+                        executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
                         writeCount.incrementAndGet();
                     } catch (Exception e) {
                         e.printStackTrace();
+                    } finally {
+                        dataSource.returnConnection(connection);
                     }
                 }
             });
@@ -78,16 +76,7 @@ public class ConcurrencyTest {
         return integer.incrementAndGet();
     }
 
-    HikariDataSource createDataSource() {
-        HikariConfig hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl("jdbc:duckdb:test.db");
-        hikariConfig.setMaximumPoolSize(10);
-        hikariConfig.setMaximumPoolSize(100);
-        hikariConfig.setAutoCommit(false);
-        return new HikariDataSource(hikariConfig);
-    }
-
-    void setupShards(HikariDataSource dataSource,
+    void setupShards(TestDataSource dataSource,
                      int numShards,
                      int numRows) throws Exception {
         Connection connection = dataSource.getConnection();
@@ -98,12 +87,37 @@ public class ConcurrencyTest {
             executeQuery(connection, "insert into test SELECT range id, cast(random() * 100000 as bigint) as amount, repeat('x', 10) as description FROM range(" + numRows + ");");
             connection.commit();
         }
-        connection.close();
+        dataSource.returnConnection(connection);
     }
 
     void executeQuery(Connection connection, String query) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(query)) {
             statement.execute();
         }
+    }
+
+    static class TestDataSource {
+        final Deque<Connection> connections = new ArrayDeque<>();
+
+        TestDataSource(int size) throws Exception {
+            for (int i = 0; i < size; i++) {
+                Connection conn = DriverManager.getConnection("jdbc:duckdb:test.db");
+                conn.setAutoCommit(false);
+                connections.push(conn);
+            }
+        }
+
+        Connection getConnection() throws Exception {
+            synchronized (this) {
+                return connections.pop();
+            }
+        }
+
+        void returnConnection(Connection conn) {
+            synchronized (this) {
+                connections.push(conn);
+            }
+        }
+
     }
 }
