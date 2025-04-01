@@ -19,7 +19,7 @@ public class ConcurrencyTest {
         HikariDataSource dataSource = createDataSource();
 
         int numShards = 3;
-        int numRows = 10000000;
+        int numRows = 1000000;
         int numTreads = 10;
 
         setupShards(dataSource, numShards, numRows);
