@@ -1,10 +1,9 @@
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -13,18 +12,18 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class ConcurrencyTest {
 
-    static final String URL = "jdbc:duckdb:test.db";
     AtomicLong writeCount = new AtomicLong(0);
 
     @Test
     void concurrentReadWrite() throws Exception {
+        HikariDataSource dataSource = createDataSource();
 
         int numShards = 3;
         int numRows = 1000000;
         int numTreads = 10;
 
-        setupShards(numShards, numRows);
-        concurrentWrite(numShards, numTreads, numRows);
+        setupShards(dataSource, numShards, numRows);
+        concurrentWrite(dataSource, numShards, numTreads, numRows);
         monitor();
         TimeUnit.SECONDS.sleep(10000);
     }
@@ -42,39 +41,25 @@ public class ConcurrencyTest {
         }).start();
     }
 
-    void concurrentWrite(int numShards, int numThreads, int numRows) throws Exception {
+    void concurrentWrite(HikariDataSource dataSource,
+                         int numShards,
+                         int numThreads,
+                         int numRows) {
         AtomicInteger atomicInteger = new AtomicInteger(0);
         var executorService = Executors.newFixedThreadPool(numThreads);
         Random random = new Random();
-        List<Connection> connections = new ArrayList<>();
-        for (int i = 0; i < numThreads; i++) {
-            Connection conn = DriverManager.getConnection(URL);
-            conn.setAutoCommit(false);
-            for (int j = 0; j < numThreads; j++) {
-                executeQuery(conn, "attach if not exists 'shard" + j + ".db' as shard" + j);
-                conn.commit();
-            }
-            connections.add(conn);
-        }
         for (int i = 0; i < numThreads; i++) {
             executorService.submit(() -> {
                 while (true) {
-                    final Connection conn;
-                    synchronized (this) {
-                        int connId = random.nextInt(connections.size());
-                        conn = connections.get(connId);
-                        connections.remove(connId);
-                    }
-                    try {
-                        int shardId = random.nextInt(numShards);
+                    try (Connection connection = dataSource.getConnection()) {
+                        int shardId = random.nextInt(numShards) % numShards;
+                        executeQuery(connection, "use shard" + shardId);
                         int rowId = getNext(atomicInteger, numRows);
-                        executeQuery(conn, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
-                        conn.commit();
+                        executeQuery(connection, "update test set amount = amount + 1 where id = " + rowId);
+                        connection.commit();
                         writeCount.incrementAndGet();
-                    } finally {
-                        synchronized (this) {
-                            connections.add(conn);
-                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 }
             });
@@ -93,15 +78,27 @@ public class ConcurrencyTest {
         return integer.incrementAndGet();
     }
 
-    void setupShards(int numShards, int numRows) throws Exception {
-        try (Connection conn = DriverManager.getConnection(URL)) {
-            for (int i = 0; i < numShards; i++) {
-                executeQuery(conn, "attach database 'shard" + i + ".db' as shard" + i);
-                executeQuery(conn, "use shard" + i);
-                executeQuery(conn, "create or replace table test (id bigint primary key, amount int, description varchar)");
-                executeQuery(conn, "insert into test SELECT range id, cast(random() * 100000 as bigint) as amount, repeat('x', 10) as description FROM range(" + numRows + ");");
-            }
+    HikariDataSource createDataSource() {
+        HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl("jdbc:duckdb:test.db");
+        hikariConfig.setMaximumPoolSize(10);
+        hikariConfig.setMaximumPoolSize(100);
+        hikariConfig.setAutoCommit(false);
+        return new HikariDataSource(hikariConfig);
+    }
+
+    void setupShards(HikariDataSource dataSource,
+                     int numShards,
+                     int numRows) throws Exception {
+        Connection connection = dataSource.getConnection();
+        for (int i = 0; i < numShards; i++) {
+            executeQuery(connection, "attach database 'shard" + i + ".db' as shard" + i);
+            executeQuery(connection, "use shard" + i);
+            executeQuery(connection, "create or replace table test (id bigint primary key, amount int, description varchar)");
+            executeQuery(connection, "insert into test SELECT range id, cast(random() * 100000 as bigint) as amount, repeat('x', 10) as description FROM range(" + numRows + ");");
+            connection.commit();
         }
+        connection.close();
     }
 
     void executeQuery(Connection connection, String query) throws Exception {
