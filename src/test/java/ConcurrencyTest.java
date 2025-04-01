@@ -3,6 +3,8 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -40,29 +42,40 @@ public class ConcurrencyTest {
         }).start();
     }
 
-    void concurrentWrite(int numShards, int numThreads, int numRows) {
+    void concurrentWrite(int numShards, int numThreads, int numRows) throws Exception {
         AtomicInteger atomicInteger = new AtomicInteger(0);
         var executorService = Executors.newFixedThreadPool(numThreads);
         Random random = new Random();
+        List<Connection> connections = new ArrayList<>();
+        for (int i = 0; i < numThreads; i++) {
+            Connection conn = DriverManager.getConnection(URL);
+            conn.setAutoCommit(false);
+            for (int j = 0; j < numThreads; j++) {
+                executeQuery(conn, "attach if not exists 'shard" + j + ".db' as shard" + j);
+                conn.commit();
+            }
+            connections.add(conn);
+        }
         for (int i = 0; i < numThreads; i++) {
             executorService.submit(() -> {
-                try (Connection conn = DriverManager.getConnection(URL)) {
-                    conn.setAutoCommit(false);
+                while (true) {
+                    final Connection conn;
                     synchronized (this) {
-                        for (int j = 0; j < numShards; j++) {
-                            executeQuery(conn, "attach if not exists 'shard" + j + ".db' as shard" + j);
-                            conn.commit();
-                        }
+                        int connId = random.nextInt(connections.size());
+                        conn = connections.get(connId);
+                        connections.remove(connId);
                     }
-                    while (true) {
-                        int shardId = random.nextInt(numShards) % numShards;
+                    try {
+                        int shardId = random.nextInt(numShards);
                         int rowId = getNext(atomicInteger, numRows);
                         executeQuery(conn, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         conn.commit();
                         writeCount.incrementAndGet();
+                    } finally {
+                        synchronized (this) {
+                            connections.add(conn);
+                        }
                     }
-                } catch (Exception e) {
-                    e.printStackTrace();
                 }
             });
         }
