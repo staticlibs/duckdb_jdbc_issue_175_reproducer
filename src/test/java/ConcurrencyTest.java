@@ -1,6 +1,5 @@
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import lombok.SneakyThrows;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -16,8 +15,7 @@ public class ConcurrencyTest {
     AtomicLong writeCount = new AtomicLong(0);
 
     @Test
-    @SneakyThrows
-    void concurrentReadWrite() {
+    void concurrentReadWrite() throws Exception {
         HikariDataSource dataSource = createDataSource();
 
         int numShards = 3;
@@ -89,10 +87,9 @@ public class ConcurrencyTest {
         return new HikariDataSource(hikariConfig);
     }
 
-    @SneakyThrows
     void setupShards(HikariDataSource dataSource,
                      int numShards,
-                     int numRows) {
+                     int numRows) throws Exception {
         Connection connection = dataSource.getConnection();
         for (int i = 0; i < numShards; i++) {
             executeQuery(connection, "attach database 'shard" + i + ".db' as shard" + i);
@@ -104,8 +101,7 @@ public class ConcurrencyTest {
         connection.close();
     }
 
-    @SneakyThrows
-    void executeQuery(Connection connection, String query) {
+    void executeQuery(Connection connection, String query) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(query)) {
             statement.execute();
         }
