@@ -1,0 +1,1 @@
+java: /home/duck/duckdb-java/src/duckdb/src/storage/standard_buffer_manager.cpp:342: virtual duckdb::BufferHandle duckdb::StandardBufferManager::Pin(duckdb::shared_ptr<duckdb::BlockHandle>&): Assertion `handle->Readers() == 0' failed.

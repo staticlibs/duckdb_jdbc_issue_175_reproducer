@@ -1,0 +1,1 @@
+java: /home/duck/duckdb-java/src/duckdb/src/storage/buffer/block_handle.cpp:141: duckdb::BufferHandle duckdb::BlockHandle::Load(duckdb::unique_ptr<duckdb::FileBuffer, std::default_delete<duckdb::FileBuffer>, true>): Assertion `buffer' failed.
