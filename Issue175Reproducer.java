@@ -1,5 +1,6 @@
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -94,7 +95,7 @@ public class Issue175Reproducer {
     }
 
     static class TestDataSource {
-        final Deque<Connection> connections = new ArrayDeque<>();
+        final Deque<Connection> connections = new ConcurrentLinkedDeque<>();
 
         TestDataSource(int size) throws Exception {
             for (int i = 0; i < size; i++) {
@@ -105,15 +106,11 @@ public class Issue175Reproducer {
         }
 
         Connection getConnection() throws Exception {
-            synchronized (this) {
-                return connections.pop();
-            }
+            return connections.pop();
         }
 
         void returnConnection(Connection conn) {
-            synchronized (this) {
-                connections.push(conn);
-            }
+            connections.push(conn);
         }
 
     }
