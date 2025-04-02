@@ -110,7 +110,11 @@ public class Issue175Reproducer {
         }
 
         void returnConnection(Connection conn) {
-            connections.push(conn);
+            if (0 == System.currentTimeMillis() % 2) {
+                connections.addFirst(conn);
+            } else {
+                connections.addLast(conn);
+            }
         }
 
     }
