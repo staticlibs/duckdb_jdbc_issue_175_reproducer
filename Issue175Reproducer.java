@@ -1,10 +1,13 @@
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 public class Issue175Reproducer {
 
@@ -13,9 +16,9 @@ public class Issue175Reproducer {
     public static void main(String[] args) throws Exception {
         int numShards = 3;
         int numRows = 100000;
-        int numTreads = 2;
+        int numTreads = 8;
 
-        TestDataSource dataSource = new TestDataSource(numTreads);
+        TestDataSource dataSource = new HikariWrappedDataSource(numTreads);
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
         monitor();
@@ -40,7 +43,7 @@ public class Issue175Reproducer {
                          int numThreads,
                          int numRows) {
         AtomicInteger atomicInteger = new AtomicInteger(0);
-        var executorService = Executors.newFixedThreadPool(numThreads);
+        ExecutorService executorService = Executors.newFixedThreadPool(numThreads);
         Random random = new Random();
         for (int i = 0; i < numThreads; i++) {
             executorService.submit(() -> {
@@ -94,10 +97,17 @@ public class Issue175Reproducer {
         }
     }
 
-    static class TestDataSource {
+
+    interface TestDataSource {
+        Connection getConnection() throws Exception;
+
+        void returnConnection(Connection conn) throws Exception;
+    }
+
+    static class DequeDataSource implements TestDataSource {
         final Deque<Connection> connections = new ConcurrentLinkedDeque<>();
 
-        TestDataSource(int size) throws Exception {
+        DequeDataSource(int size) throws Exception {
             for (int i = 0; i < size; i++) {
                 Connection conn = DriverManager.getConnection("jdbc:duckdb:test.db");
                 conn.setAutoCommit(false);
@@ -105,17 +115,40 @@ public class Issue175Reproducer {
             }
         }
 
-        Connection getConnection() throws Exception {
+        @Override
+        public Connection getConnection() throws Exception {
             return connections.pop();
         }
 
-        void returnConnection(Connection conn) {
+        @Override
+        public void returnConnection(Connection conn) {
             if (0 == System.currentTimeMillis() % 2) {
                 connections.addFirst(conn);
             } else {
                 connections.addLast(conn);
             }
         }
+    }
 
+    static class HikariWrappedDataSource implements TestDataSource {
+        final HikariDataSource hikariDataSource;
+
+        HikariWrappedDataSource(int size) throws Exception {
+            HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setJdbcUrl("jdbc:duckdb:test.db");
+            hikariConfig.setMaximumPoolSize(size);
+            hikariConfig.setAutoCommit(false);
+            this.hikariDataSource = new HikariDataSource(hikariConfig);
+        }
+
+        @Override
+        public Connection getConnection() throws Exception {
+            return hikariDataSource.getConnection();
+        }
+
+        @Override
+        public void returnConnection(Connection conn) throws Exception {
+            conn.close();
+        }
     }
 }
