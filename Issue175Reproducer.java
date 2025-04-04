@@ -12,8 +12,8 @@ public class Issue175Reproducer {
 
     public static void main(String[] args) throws Exception {
         int numShards = 3;
-        int numRows = 100000;
-        int numTreads = 8;
+        int numRows = 1000000;
+        int numTreads = 16;
 
         TestDataSource dataSource = new DequeDataSource("jdbc:duckdb:test.db", numTreads);
         setupShards(dataSource, numShards, numRows);
