@@ -3,11 +3,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
 
 public class Issue175Reproducer {
 
@@ -18,24 +15,13 @@ public class Issue175Reproducer {
         int numRows = 100000;
         int numTreads = 8;
 
-        TestDataSource dataSource = new HikariWrappedDataSource(numTreads);
+        TestDataSource dataSource = new DequeDataSource("jdbc:duckdb:test.db", numTreads);
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
-        monitor();
-        TimeUnit.SECONDS.sleep(10000);
-    }
-
-    static void monitor() {
-        new Thread(() -> {
-            while (true) {
-                try {
-                    Thread.sleep(10000);
-                    System.out.println("Write count: " + writeCount.get());
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-        }).start();
+        while (true) {
+            Thread.sleep(10000);
+            System.out.println("Write count: " + writeCount.get());
+        }
     }
 
     static void concurrentWrite(TestDataSource dataSource,
@@ -97,7 +83,6 @@ public class Issue175Reproducer {
         }
     }
 
-
     interface TestDataSource {
         Connection getConnection() throws Exception;
 
@@ -107,9 +92,9 @@ public class Issue175Reproducer {
     static class DequeDataSource implements TestDataSource {
         final Deque<Connection> connections = new ConcurrentLinkedDeque<>();
 
-        DequeDataSource(int size) throws Exception {
+        DequeDataSource(String url, int size) throws Exception {
             for (int i = 0; i < size; i++) {
-                Connection conn = DriverManager.getConnection("jdbc:duckdb:test.db");
+                Connection conn = DriverManager.getConnection(url);
                 conn.setAutoCommit(false);
                 connections.push(conn);
             }
@@ -122,33 +107,35 @@ public class Issue175Reproducer {
 
         @Override
         public void returnConnection(Connection conn) {
-            if (0 == System.currentTimeMillis() % 2) {
-                connections.addFirst(conn);
-            } else {
-                connections.addLast(conn);
-            }
+            connections.push(conn);
         }
     }
 
-    static class HikariWrappedDataSource implements TestDataSource {
-        final HikariDataSource hikariDataSource;
+    static class ArrayDataSource implements TestDataSource {
+        final List<Connection> connections = new ArrayList<>();
+        final Random random = new Random();
 
-        HikariWrappedDataSource(int size) throws Exception {
-            HikariConfig hikariConfig = new HikariConfig();
-            hikariConfig.setJdbcUrl("jdbc:duckdb:test.db");
-            hikariConfig.setMaximumPoolSize(size);
-            hikariConfig.setAutoCommit(false);
-            this.hikariDataSource = new HikariDataSource(hikariConfig);
+        ArrayDataSource(String url, int size) throws Exception {
+            for (int i = 0; i < size; i++) {
+                Connection conn = DriverManager.getConnection(url);
+                conn.setAutoCommit(false);
+                connections.add(conn);
+            }
         }
 
         @Override
         public Connection getConnection() throws Exception {
-            return hikariDataSource.getConnection();
+            synchronized (this) {
+                int idx = random.nextInt(0, connections.size());
+                return connections.remove(idx);
+            }
         }
 
         @Override
-        public void returnConnection(Connection conn) throws Exception {
-            conn.close();
+        public void returnConnection(Connection conn) {
+            synchronized (this) {
+                connections.add(conn);
+            }
         }
     }
 }
