@@ -15,7 +15,7 @@ public class Issue175Reproducer {
         int numRows = 1000000;
         int numTreads = 16;
 
-        TestDataSource dataSource = new DequeDataSource("jdbc:duckdb:test.db", numTreads);
+        TestDataSource dataSource = new ArrayDataSource("jdbc:duckdb:test.db", numTreads);
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
         while (true) {
