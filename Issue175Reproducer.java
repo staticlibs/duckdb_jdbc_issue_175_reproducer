@@ -15,7 +15,7 @@ public class Issue175Reproducer {
         int numRows = 1000000;
         int numTreads = 16;
 
-        TestDataSource dataSource = new ArrayDataSource("jdbc:duckdb:test.db", numTreads);
+        TestDataSource dataSource = new SyncDequeueDataSource("jdbc:duckdb:test.db", numTreads);
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
         while (true) {
@@ -89,10 +89,10 @@ public class Issue175Reproducer {
         void returnConnection(Connection conn) throws Exception;
     }
 
-    static class DequeDataSource implements TestDataSource {
+    static class ConcurrentDequeDataSource implements TestDataSource {
         final Deque<Connection> connections = new ConcurrentLinkedDeque<>();
 
-        DequeDataSource(String url, int size) throws Exception {
+        ConcurrentDequeDataSource(String url, int size) throws Exception {
             for (int i = 0; i < size; i++) {
                 Connection conn = DriverManager.getConnection(url);
                 conn.setAutoCommit(false);
@@ -111,11 +111,10 @@ public class Issue175Reproducer {
         }
     }
 
-    static class ArrayDataSource implements TestDataSource {
-        final List<Connection> connections = new ArrayList<>();
-        final Random random = new Random();
+    static class SyncDequeueDataSource implements TestDataSource {
+        final Deque<Connection> connections = new ArrayDeque<>();
 
-        ArrayDataSource(String url, int size) throws Exception {
+        SyncDequeueDataSource(String url, int size) throws Exception {
             for (int i = 0; i < size; i++) {
                 Connection conn = DriverManager.getConnection(url);
                 conn.setAutoCommit(false);
@@ -126,15 +125,14 @@ public class Issue175Reproducer {
         @Override
         public Connection getConnection() throws Exception {
             synchronized (this) {
-                int idx = random.nextInt(0, connections.size());
-                return connections.remove(idx);
+                return connections.pop();
             }
         }
 
         @Override
         public void returnConnection(Connection conn) {
             synchronized (this) {
-                connections.add(conn);
+                connections.push(conn);
             }
         }
     }
