@@ -13,7 +13,7 @@ public class Issue175Reproducer {
     public static void main(String[] args) throws Exception {
         int numShards = 3;
         int numRows = 1000000;
-        int numTreads = 16;
+        int numTreads = Runtime.getRuntime().availableProcessors();
 
         TestDataSource dataSource = new SyncDequeueDataSource("jdbc:duckdb:test.db", numTreads);
         setupShards(dataSource, numShards, numRows);
@@ -36,13 +36,14 @@ public class Issue175Reproducer {
                 while (true) {
                     Connection connection = dataSource.getConnection();
                     try  {
-                        int shardId = random.nextInt(numShards) % numShards;
+                        int shardId = random.nextInt(numShards);
                         int rowId = getNext(atomicInteger, numRows);
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
                         writeCount.incrementAndGet();
                     } catch (Exception e) {
                         e.printStackTrace();
+                        throw new RuntimeException(e);
                     } finally {
                         dataSource.returnConnection(connection);
                     }
@@ -87,28 +88,6 @@ public class Issue175Reproducer {
         Connection getConnection() throws Exception;
 
         void returnConnection(Connection conn) throws Exception;
-    }
-
-    static class ConcurrentDequeDataSource implements TestDataSource {
-        final Deque<Connection> connections = new ConcurrentLinkedDeque<>();
-
-        ConcurrentDequeDataSource(String url, int size) throws Exception {
-            for (int i = 0; i < size; i++) {
-                Connection conn = DriverManager.getConnection(url);
-                conn.setAutoCommit(false);
-                connections.push(conn);
-            }
-        }
-
-        @Override
-        public Connection getConnection() throws Exception {
-            return connections.pop();
-        }
-
-        @Override
-        public void returnConnection(Connection conn) {
-            connections.push(conn);
-        }
     }
 
     static class SyncDequeueDataSource implements TestDataSource {
