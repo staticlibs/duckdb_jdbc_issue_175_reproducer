@@ -1,1 +1,2 @@
-TransactionContext Error: Current transaction is aborted (please ROLLBACK)
+Invalid Error: Invalid argument
+        at org.duckdb.DuckDBNative.duckdb_jdbc_execute(Native Method)

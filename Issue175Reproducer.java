@@ -1,14 +1,15 @@
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Issue175Reproducer {
 
     static final AtomicLong writeCount = new AtomicLong(0);
+    static final AtomicBoolean writeFailed = new AtomicBoolean(false);
 
     public static void main(String[] args) throws Exception {
         int numShards = 3;
@@ -18,7 +19,7 @@ public class Issue175Reproducer {
         TestDataSource dataSource = new SyncDequeueDataSource("jdbc:duckdb:test.db", numTreads);
         setupShards(dataSource, numShards, numRows);
         concurrentWrite(dataSource, numShards, numTreads, numRows);
-        while (true) {
+        while (!writeFailed.get()) {
             Thread.sleep(10000);
             System.out.println("Write count: " + writeCount.get());
         }
@@ -33,7 +34,7 @@ public class Issue175Reproducer {
         Random random = new Random();
         for (int i = 0; i < numThreads; i++) {
             executorService.submit(() -> {
-                while (true) {
+                while (!writeFailed.get()) {
                     Connection connection = dataSource.getConnection();
                     try  {
                         int shardId = random.nextInt(numShards);
@@ -42,6 +43,7 @@ public class Issue175Reproducer {
                         connection.commit();
                         writeCount.incrementAndGet();
                     } catch (Exception e) {
+                        writeFailed.set(true);
                         e.printStackTrace();
                         throw new RuntimeException(e);
                     } finally {
@@ -85,9 +87,9 @@ public class Issue175Reproducer {
     }
 
     interface TestDataSource {
-        Connection getConnection() throws Exception;
+        Connection getConnection();
 
-        void returnConnection(Connection conn) throws Exception;
+        void returnConnection(Connection conn);
     }
 
     static class SyncDequeueDataSource implements TestDataSource {
@@ -102,7 +104,7 @@ public class Issue175Reproducer {
         }
 
         @Override
-        public Connection getConnection() throws Exception {
+        public Connection getConnection() {
             synchronized (this) {
                 return connections.pop();
             }
