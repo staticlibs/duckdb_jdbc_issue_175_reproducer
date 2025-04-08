@@ -16,16 +16,16 @@ public class Issue175Reproducer {
         int numRows = 1000000;
         int numTreads = Runtime.getRuntime().availableProcessors();
 
-        TestDataSource dataSource = new SyncDequeueDataSource("jdbc:duckdb:test.db", numTreads);
-        setupShards(dataSource, numShards, numRows);
-        concurrentWrite(dataSource, numShards, numTreads, numRows);
+        TestConnPool connPool = new TestConnPool("jdbc:duckdb:test.db", numTreads);
+        setupShards(connPool, numShards, numRows);
+        concurrentWrite(connPool, numShards, numTreads, numRows);
         while (!writeFailed.get()) {
             Thread.sleep(10000);
             System.out.println("Write count: " + writeCount.get());
         }
     }
 
-    static void concurrentWrite(TestDataSource dataSource,
+    static void concurrentWrite(TestConnPool connPool,
                          int numShards,
                          int numThreads,
                          int numRows) {
@@ -35,7 +35,7 @@ public class Issue175Reproducer {
         for (int i = 0; i < numThreads; i++) {
             executorService.submit(() -> {
                 while (!writeFailed.get()) {
-                    Connection connection = dataSource.getConnection();
+                    Connection connection = connPool.getConnection();
                     try  {
                         int shardId = random.nextInt(numShards);
                         int rowId = getNext(atomicInteger, numRows);
@@ -47,7 +47,7 @@ public class Issue175Reproducer {
                         e.printStackTrace();
                         throw new RuntimeException(e);
                     } finally {
-                        dataSource.returnConnection(connection);
+                        connPool.returnConnection(connection);
                     }
                 }
             });
@@ -66,10 +66,10 @@ public class Issue175Reproducer {
         return integer.incrementAndGet();
     }
 
-    static void setupShards(TestDataSource dataSource,
+    static void setupShards(TestConnPool connPool,
                      int numShards,
                      int numRows) throws Exception {
-        Connection connection = dataSource.getConnection();
+        Connection connection = connPool.getConnection();
         for (int i = 0; i < numShards; i++) {
             executeQuery(connection, "attach database 'shard" + i + ".db' as shard" + i);
             executeQuery(connection, "use shard" + i);
@@ -77,7 +77,7 @@ public class Issue175Reproducer {
             executeQuery(connection, "insert into test SELECT range id, cast(random() * 100000 as bigint) as amount, repeat('x', 10) as description FROM range(" + numRows + ");");
             connection.commit();
         }
-        dataSource.returnConnection(connection);
+        connPool.returnConnection(connection);
     }
 
     static void executeQuery(Connection connection, String query) throws Exception {
@@ -86,16 +86,11 @@ public class Issue175Reproducer {
         }
     }
 
-    interface TestDataSource {
-        Connection getConnection();
+    static class TestConnPool {
+        final List<Connection> connections = new ArrayList<>();
+        final Random random = new Random();
 
-        void returnConnection(Connection conn);
-    }
-
-    static class SyncDequeueDataSource implements TestDataSource {
-        final Deque<Connection> connections = new ArrayDeque<>();
-
-        SyncDequeueDataSource(String url, int size) throws Exception {
+        TestConnPool(String url, int size) throws Exception {
             for (int i = 0; i < size; i++) {
                 Connection conn = DriverManager.getConnection(url);
                 conn.setAutoCommit(false);
@@ -103,17 +98,16 @@ public class Issue175Reproducer {
             }
         }
 
-        @Override
         public Connection getConnection() {
             synchronized (this) {
-                return connections.pop();
+                int idx = random.nextInt(connections.size());
+                return connections.remove(idx);
             }
         }
 
-        @Override
         public void returnConnection(Connection conn) {
             synchronized (this) {
-                connections.push(conn);
+                connections.add(conn);
             }
         }
     }

@@ -1,0 +1,2 @@
+Invalid Error: bad_weak_ptr
+        at org.duckdb.DuckDBNative.duckdb_jdbc_execute(Native Method)
