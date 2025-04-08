@@ -12,9 +12,10 @@ public class Issue175Reproducer {
     static final AtomicBoolean writeFailed = new AtomicBoolean(false);
 
     public static void main(String[] args) throws Exception {
-        int numShards = 2;
+        int numberOfCores = Runtime.getRuntime().availableProcessors();
+        int numShards = numberOfCores / 2;
+        int numTreads = numberOfCores;
         int numRows = 1000000;
-        int numTreads = Runtime.getRuntime().availableProcessors()/2;
 
         TestConnPool connPool = new TestConnPool("jdbc:duckdb:test.db", numTreads);
         setupShards(connPool, numShards, numRows);
