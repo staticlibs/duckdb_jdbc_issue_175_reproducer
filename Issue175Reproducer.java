@@ -8,11 +8,15 @@ public class Issue175Reproducer {
     static class BouncingSpinLock {
         private final AtomicBoolean lock = new AtomicBoolean(false);
 
-        void lock() {
-            Thread.yield();
+        void lock() throws Exception {
+
+            Thread.sleep(1);
+
             while (!lock.compareAndSet(false, true)) {
+                Thread.sleep(1);
                 Thread.yield();
             }
+
         }
 
         void unlock() {
@@ -54,22 +58,23 @@ public class Issue175Reproducer {
 
     static void concurrentWrite(List<Connection> connPool, int numShards, int numConnThreads, int numRows) throws Exception {
         BouncingSpinLock lock = new BouncingSpinLock();
-        Random random = new Random();
         AtomicLong writeCount = new AtomicLong(0);
 
         System.out.println("Starting connection threads, count: " + numConnThreads);
         for (int i = 0; i < numConnThreads; i++) {
             Thread th = new Thread(() -> {
+                Random random = new Random();
                 while (true) {
                     try  {
 
                         lock.lock();
                         int connIdx = random.nextInt(connPool.size());
                         Connection connection = connPool.remove(connIdx);
+                        lock.unlock();
+
                         int shardId = random.nextInt(numShards);
                         long preInc = writeCount.incrementAndGet() - 1;
                         long rowId = preInc - 1 % numRows;
-                        lock.unlock();
 
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
