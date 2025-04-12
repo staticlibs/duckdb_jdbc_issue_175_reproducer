@@ -5,18 +5,13 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class Issue175Reproducer {
 
-    static class BouncingSpinLock {
+    static class YieldingSpinLock {
         private final AtomicBoolean lock = new AtomicBoolean(false);
 
-        void lock() throws Exception {
-
-            Thread.sleep(1);
-
+        void lock() {
             while (!lock.compareAndSet(false, true)) {
-                Thread.sleep(1);
                 Thread.yield();
             }
-
         }
 
         void unlock() {
@@ -57,7 +52,6 @@ public class Issue175Reproducer {
     }
 
     static void concurrentWrite(List<Connection> connPool, int numShards, int numConnThreads, int numRows) throws Exception {
-        BouncingSpinLock lock = new BouncingSpinLock();
         AtomicLong writeCount = new AtomicLong(0);
 
         System.out.println("Starting connection threads, count: " + numConnThreads);
@@ -67,10 +61,11 @@ public class Issue175Reproducer {
                 while (true) {
                     try  {
 
-                        lock.lock();
-                        int connIdx = random.nextInt(connPool.size());
-                        Connection connection = connPool.remove(connIdx);
-                        lock.unlock();
+                        final Connection connection;
+                        synchronized (connPool) {
+                            int connIdx = random.nextInt(connPool.size());
+                            connection = connPool.remove(connIdx);
+                        }
 
                         int shardId = random.nextInt(numShards);
                         long preInc = writeCount.incrementAndGet() - 1;
@@ -79,15 +74,14 @@ public class Issue175Reproducer {
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
 
-                        lock.lock();
-                        connPool.add(connection);
-                        lock.unlock();
+                        synchronized (connPool) {
+                            connPool.add(connection);
+                        }
 
                     } catch (Exception e) {
                         e.printStackTrace();
                         System.exit(1);
                     }
-
                 }
             });
             th.start();
