@@ -1,7 +1,6 @@
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Issue175Reproducer {
@@ -56,42 +55,24 @@ public class Issue175Reproducer {
         statement.close();
     }
 
-    static int getNextRowId(SpinLock lock, AtomicInteger atomicRowId, int max) {
-        int preInc = atomicRowId.incrementAndGet() - 1;
-        if (preInc >= max) {
-            lock.lock();
-            if (atomicRowId.get() >= max) {
-                atomicRowId.set(0);
-            }
-            int res = atomicRowId.incrementAndGet();
-            lock.unlock();
-            return res;
-        }
-        return preInc;
-    }
-
     static void concurrentWrite(TestConnPool connPool, int numShards, int numConnThreads, int numRows) throws Exception {
-        AtomicInteger atomicRowId = new AtomicInteger(0);
-        SpinLock incrementLock = new SpinLock();
-        Random random = new Random();
         AtomicLong writeCount = new AtomicLong(0);
 
         System.out.println("Starting connection threads, count: " + numConnThreads);
         for (int i = 0; i < numConnThreads; i++) {
             Thread th = new Thread(() -> {
+                Random random = new Random();
                 while (true) {
                     Connection connection = connPool.getConnection();
                     try  {
                         int shardId = random.nextInt(numShards);
-                        int rowId = getNextRowId(incrementLock, atomicRowId, numRows);
+                        long rowId = (writeCount.incrementAndGet() - 1) % numRows;
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
-                        writeCount.incrementAndGet();
+                        connPool.returnConnection(connection);
                     } catch (Exception e) {
                         e.printStackTrace();
                         System.exit(1);
-                    } finally {
-                        connPool.returnConnection(connection);
                     }
                 }
             });
@@ -120,13 +101,13 @@ public class Issue175Reproducer {
     }
 
     public static void main(String[] args) throws Exception {
-        int numberOfCores = Runtime.getRuntime().availableProcessors();
+        int numCores = Runtime.getRuntime().availableProcessors();
         int numShards = 3;
-        int numConnThreads = numberOfCores;
-        int numDbWorkerThreads = numberOfCores;
+        int numConnThreads = numCores;
+        int numDbWorkerThreads = numCores;
         int numRows = 1_000_000;
 
-        System.out.println("CPU cores: " + numberOfCores);
+        System.out.println("CPU cores: " + numCores);
         System.out.println("DB shards: " + numShards);
         System.out.println("Connection threads: " + numConnThreads);
         System.out.println("DB worker threads: " + numDbWorkerThreads);
