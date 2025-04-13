@@ -2,6 +2,8 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class Issue175Reproducer {
 
@@ -53,6 +55,7 @@ public class Issue175Reproducer {
 
     static void concurrentWrite(List<Connection> connPool, int numShards, int numConnThreads, int numRows) throws Exception {
         AtomicLong writeCount = new AtomicLong(0);
+        Lock fairLock = new ReentrantLock(true);
 
         System.out.println("Starting connection threads, count: " + numConnThreads);
         for (int i = 0; i < numConnThreads; i++) {
@@ -61,11 +64,10 @@ public class Issue175Reproducer {
                 while (true) {
                     try  {
 
-                        final Connection connection;
-                        synchronized (connPool) {
-                            int connIdx = random.nextInt(connPool.size());
-                            connection = connPool.remove(connIdx);
-                        }
+                        fairLock.lock();
+                        int connIdx = random.nextInt(connPool.size());
+                        Connection connection = connPool.remove(connIdx);
+                        fairLock.unlock();
 
                         int shardId = random.nextInt(numShards);
                         long preInc = writeCount.incrementAndGet() - 1;
@@ -74,9 +76,9 @@ public class Issue175Reproducer {
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
 
-                        synchronized (connPool) {
-                            connPool.add(connection);
-                        }
+                        fairLock.lock();
+                        connPool.add(connection);
+                        fairLock.unlock();
 
                     } catch (Exception e) {
                         e.printStackTrace();
