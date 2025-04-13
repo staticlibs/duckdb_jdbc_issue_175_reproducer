@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
 
 public class Issue175Reproducer {
 
@@ -59,7 +60,10 @@ public class Issue175Reproducer {
         public Connection takeConnection() throws Exception {
             long now = System.currentTimeMillis();
             if (now > lastLog + 10000) {
-                System.out.println("Current pool size: " + hikariDataSource.getHikariPoolMXBean().getTotalConnections());
+                HikariPoolMXBean mxBean = hikariDataSource.getHikariPoolMXBean();
+                System.out.println("Pool total connections: " + mxBean.getTotalConnections());
+                System.out.println("Pool active connections: " + mxBean.getActiveConnections());
+                System.out.println("Pool idle connections: " + mxBean.getIdleConnections());
                 lastLog = now;
             }
             return hikariDataSource.getConnection();
