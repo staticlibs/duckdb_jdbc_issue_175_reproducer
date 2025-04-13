@@ -42,6 +42,7 @@ public class Issue175Reproducer {
 
     static class HikariConnPool implements TestConnPool {
         final HikariDataSource hikariDataSource;
+        long lastLog = System.currentTimeMillis();
 
         HikariConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
             HikariConfig hikariConfig = new HikariConfig();
@@ -56,6 +57,11 @@ public class Issue175Reproducer {
 
         @Override
         public Connection takeConnection() throws Exception {
+            long now = System.currentTimeMillis();
+            if (now > lastLog + 10000) {
+                System.out.println("Current pool size: " + hikariDataSource.getHikariPoolMXBean().getTotalConnections());
+                lastLog = now;
+            }
             return hikariDataSource.getConnection();
         }
 
