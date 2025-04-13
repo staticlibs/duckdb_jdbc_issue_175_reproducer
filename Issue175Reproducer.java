@@ -1,10 +1,10 @@
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.HikariPoolMXBean;
 
 public class Issue175Reproducer {
 
@@ -43,7 +43,6 @@ public class Issue175Reproducer {
 
     static class HikariConnPool implements TestConnPool {
         final HikariDataSource hikariDataSource;
-        long lastLog = System.currentTimeMillis();
 
         HikariConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
             HikariConfig hikariConfig = new HikariConfig();
@@ -58,14 +57,6 @@ public class Issue175Reproducer {
 
         @Override
         public Connection takeConnection() throws Exception {
-            long now = System.currentTimeMillis();
-            if (now > lastLog + 10000) {
-                HikariPoolMXBean mxBean = hikariDataSource.getHikariPoolMXBean();
-                System.out.println("Pool total connections: " + mxBean.getTotalConnections());
-                System.out.println("Pool active connections: " + mxBean.getActiveConnections());
-                System.out.println("Pool idle connections: " + mxBean.getIdleConnections());
-                lastLog = now;
-            }
             return hikariDataSource.getConnection();
         }
 
@@ -79,6 +70,18 @@ public class Issue175Reproducer {
         PreparedStatement statement = connection.prepareStatement(query);
         statement.execute();
         statement.close();
+    }
+
+    static int getNextRowId(AtomicInteger integer, int max) {
+        if (integer.get() >= max) {
+            synchronized (integer) {
+                if (integer.get() >= max) {
+                    integer.set(0);
+                }
+                return integer.incrementAndGet();
+            }
+        }
+        return integer.incrementAndGet();
     }
 
     static void setupShards(TestConnPool connPool, int numShards, int numRows) throws Exception {
@@ -98,21 +101,22 @@ public class Issue175Reproducer {
 
     static void concurrentWrite(TestConnPool connPool, int numShards, int numConnThreads, int numRows) throws Exception {
         AtomicLong writeCount = new AtomicLong(0);
+        AtomicInteger atomicInteger = new AtomicInteger(0);
+        Random random = new Random();
 
         System.out.println("Starting connection threads, count: " + numConnThreads);
         for (int i = 0; i < numConnThreads; i++) {
             Thread th = new Thread(() -> {
-                Random random = new Random();
                 while (true) {
                     try  {
                         Connection connection = connPool.takeConnection();
 
-                        int shardId = random.nextInt(numShards);
-                        long preInc = writeCount.incrementAndGet() - 1;
-                        long rowId = preInc - 1 % numRows;
+                        int shardId = random.nextInt(numShards) % numShards;
+                        int rowId = getNextRowId(atomicInteger, numRows);
 
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
+                        writeCount.incrementAndGet();
 
                         connPool.returnConnection(connection);
                     } catch (Exception e) {
