@@ -42,12 +42,11 @@ public class Issue175Reproducer {
 
     static class HikariConnPool implements TestConnPool {
         final HikariDataSource hikariDataSource;
-        long lastLog = System.currentTimeMillis();
 
         HikariConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
             HikariConfig hikariConfig = new HikariConfig();
             hikariConfig.setJdbcUrl("jdbc:duckdb:" + dbPath);
-            hikariConfig.setMaximumPoolSize(numConnThreads);
+            hikariConfig.setMaximumPoolSize(numConnThreads * 10);
             Properties driverConfig = new Properties();
             driverConfig.put("threads", numDbWorkerThreads);
             hikariConfig.setDataSourceProperties(driverConfig);
@@ -57,11 +56,6 @@ public class Issue175Reproducer {
 
         @Override
         public Connection takeConnection() throws Exception {
-            long now = System.currentTimeMillis();
-            if (now > lastLog + 10000) {
-                System.out.println(hikariDataSource.getHikariPoolMXBean().getTotalConnections());
-                lastLog = now;
-            }
             return hikariDataSource.getConnection();
         }
 
@@ -85,7 +79,7 @@ public class Issue175Reproducer {
             executeQuery(conn, "use shard" + i);
             executeQuery(conn, "create or replace table test (id bigint primary key, amount int, description varchar)");
             executeQuery(conn, "insert into test" +
-                    " SELECT range as id, cast(random() * " + numRows + " as bigint) as amount, repeat('x', 10) as description" +
+                    " SELECT range as id, cast(random() * 100000 as bigint) as amount, repeat('x', 10) as description" +
                     " FROM range(" + numRows + ");");
             conn.commit();
         }
