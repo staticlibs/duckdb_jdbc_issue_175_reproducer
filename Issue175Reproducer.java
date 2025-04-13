@@ -4,8 +4,23 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 public class Issue175Reproducer {
+
+    static class StickingSpinLock {
+        private final AtomicBoolean lock = new AtomicBoolean(false);
+
+        void lock() {
+            while (!lock.compareAndSet(false, true)) {
+            }
+        }
+
+        void unlock() {
+            lock.set(false);
+        }
+    }
 
     static class YieldingSpinLock {
         private final AtomicBoolean lock = new AtomicBoolean(false);
@@ -21,16 +36,35 @@ public class Issue175Reproducer {
         }
     }
 
-    static List<Connection> createConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
-        Properties config = new Properties();
-        config.put("threads", numDbWorkerThreads);
-        List<Connection> connections = new ArrayList<>();
-        for (int i = 0; i < numConnThreads; i++) {
-            Connection conn = DriverManager.getConnection("jdbc:duckdb:" + dbPath, config);
-            conn.setAutoCommit(false);
-            connections.add(conn);
+    interface TestConnPool {
+        Connection takeConnection() throws Exception;
+
+        void returnConnection(Connection conn) throws Exception;
+    }
+
+    static class HikariConnPool implements TestConnPool {
+        final HikariDataSource hikariDataSource;
+
+        HikariConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
+            HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setJdbcUrl("jdbc:duckdb:" + dbPath);
+            hikariConfig.setMaximumPoolSize(numConnThreads);
+            Properties driverConfig = new Properties();
+            driverConfig.put("threads", numDbWorkerThreads);
+            hikariConfig.setDataSourceProperties(driverConfig);
+            hikariConfig.setAutoCommit(false);
+            this.hikariDataSource = new HikariDataSource(hikariConfig);
         }
-        return connections;
+
+        @Override
+        public Connection takeConnection() throws Exception {
+            return hikariDataSource.getConnection();
+        }
+
+        @Override
+        public void returnConnection(Connection conn) throws Exception {
+            conn.close();
+        }
     }
 
     static void executeQuery(Connection connection, String query) throws Exception {
@@ -39,23 +73,23 @@ public class Issue175Reproducer {
         statement.close();
     }
 
-    static void setupShards(List<Connection> connPool, int numShards, int numRows) throws Exception {
-        Connection connection = connPool.get(0);
+    static void setupShards(TestConnPool connPool, int numShards, int numRows) throws Exception {
+        Connection conn = connPool.takeConnection();
         for (int i = 0; i < numShards; i++) {
             System.out.println("Generating data for shard number: " + i + ", rows count: " + numRows);
-            executeQuery(connection, "attach database 'shard" + i + ".db' as shard" + i);
-            executeQuery(connection, "use shard" + i);
-            executeQuery(connection, "create or replace table test (id bigint primary key, amount int, description varchar)");
-            executeQuery(connection, "insert into test" +
+            executeQuery(conn, "attach database 'shard" + i + ".db' as shard" + i);
+            executeQuery(conn, "use shard" + i);
+            executeQuery(conn, "create or replace table test (id bigint primary key, amount int, description varchar)");
+            executeQuery(conn, "insert into test" +
                     " SELECT range as id, cast(random() * " + numRows + " as bigint) as amount, repeat('x', 10) as description" +
                     " FROM range(" + numRows + ");");
-            connection.commit();
+            conn.commit();
         }
+        connPool.returnConnection(conn);
     }
 
-    static void concurrentWrite(List<Connection> connPool, int numShards, int numConnThreads, int numRows) throws Exception {
+    static void concurrentWrite(TestConnPool connPool, int numShards, int numConnThreads, int numRows) throws Exception {
         AtomicLong writeCount = new AtomicLong(0);
-        Lock fairLock = new ReentrantLock(true);
 
         System.out.println("Starting connection threads, count: " + numConnThreads);
         for (int i = 0; i < numConnThreads; i++) {
@@ -63,11 +97,7 @@ public class Issue175Reproducer {
                 Random random = new Random();
                 while (true) {
                     try  {
-
-                        fairLock.lock();
-                        int connIdx = random.nextInt(connPool.size());
-                        Connection connection = connPool.remove(connIdx);
-                        fairLock.unlock();
+                        Connection connection = connPool.takeConnection();
 
                         int shardId = random.nextInt(numShards);
                         long preInc = writeCount.incrementAndGet() - 1;
@@ -76,10 +106,7 @@ public class Issue175Reproducer {
                         executeQuery(connection, "update shard" + shardId + ".main.test set amount = amount + 1 where id = " + rowId);
                         connection.commit();
 
-                        fairLock.lock();
-                        connPool.add(connection);
-                        fairLock.unlock();
-
+                        connPool.returnConnection(connection);
                     } catch (Exception e) {
                         e.printStackTrace();
                         System.exit(1);
@@ -107,7 +134,7 @@ public class Issue175Reproducer {
         System.out.println("Connection threads: " + numConnThreads);
         System.out.println("DB worker threads: " + numDbWorkerThreads);
 
-        List<Connection> connPool = createConnPool("test.db", numConnThreads, numDbWorkerThreads);
+        TestConnPool connPool = new HikariConnPool("test.db", numConnThreads, numDbWorkerThreads);
         setupShards(connPool, numShards, numRows);
         concurrentWrite(connPool, numShards, numConnThreads, numRows);
     }
