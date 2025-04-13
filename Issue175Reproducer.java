@@ -4,13 +4,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 public class Issue175Reproducer {
 
     public static void main(String[] args) throws Exception {
         int numCores = Runtime.getRuntime().availableProcessors();
         int numShards = 3;
-        int numRows = 10_000_000;
+        int numRows = 10_000;
         int numConnThreads = numCores;
         int numDbWorkerThreads = numCores;
 
@@ -19,7 +21,7 @@ public class Issue175Reproducer {
         System.out.println("Connection threads: " + numConnThreads);
         System.out.println("DB worker threads: " + numDbWorkerThreads);
 
-        TestConnPool connPool = new TestConnPool("test.db", numConnThreads, numDbWorkerThreads);
+        TestConnPool connPool = new HikariWrappedConnPool("test.db", numConnThreads, numDbWorkerThreads);
         setupShards(connPool, numShards, numRows);
         concurrentWrite(connPool, numShards, numConnThreads, numRows);
     }
@@ -36,7 +38,7 @@ public class Issue175Reproducer {
             executorService.submit(() -> {
                 while (true) {
                     try {
-                        Connection conn = connPool.getConnection();
+                        Connection conn = connPool.takeConnection();
                         int shardId = random.nextInt(numShards);
                         int rowId = getNext(atomicInteger, numRows);
                         executeQuery(conn, "update shard" + shardId +
@@ -71,7 +73,7 @@ public class Issue175Reproducer {
     }
 
     static void setupShards(TestConnPool connPool, int numShards, int numRows) throws Exception {
-        Connection connection = connPool.getConnection();
+        Connection connection = connPool.takeConnection();
         for (int i = 0; i < numShards; i++) {
             System.out.println("Generating data for shard number: " + i + ", rows count: " + numRows);
             executeQuery(connection, "attach database 'shard" + i + ".db' as shard" + i);
@@ -93,11 +95,17 @@ public class Issue175Reproducer {
         }
     }
 
-    static class TestConnPool {
+    interface TestConnPool {
+        Connection takeConnection() throws Exception;
+
+        void returnConnection(Connection conn) throws Exception;
+    }
+
+    static class RandomArrayConnPool implements TestConnPool {
         final List<Connection> connections = new ArrayList<>();
         final Random random = new Random();
 
-        TestConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
+        RandomArrayConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
             Properties config = new Properties();
             config.put("threads", numDbWorkerThreads);
             for (int i = 0; i < numConnThreads; i++) {
@@ -107,7 +115,7 @@ public class Issue175Reproducer {
             }
         }
 
-        public Connection getConnection() {
+        public Connection takeConnection() {
             synchronized (this) {
                 int idx = random.nextInt(connections.size());
                 return connections.remove(idx);
@@ -118,6 +126,31 @@ public class Issue175Reproducer {
             synchronized (this) {
                 connections.add(conn);
             }
+        }
+    }
+
+    static class HikariWrappedConnPool implements TestConnPool {
+        final HikariDataSource hikariDataSource;
+
+        HikariWrappedConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
+            HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setJdbcUrl("jdbc:duckdb:" + dbPath);
+            hikariConfig.setMaximumPoolSize(numConnThreads * 4);
+            hikariConfig.setAutoCommit(false);
+            Properties dsConfig = new Properties();
+            dsConfig.put("threads", numDbWorkerThreads);
+            hikariConfig.setDataSourceProperties(dsConfig);
+            this.hikariDataSource = new HikariDataSource(hikariConfig);
+        }
+
+        @Override
+        public Connection takeConnection() throws Exception {
+            return hikariDataSource.getConnection();
+        }
+
+        @Override
+        public void returnConnection(Connection conn) throws Exception {
+            conn.close();
         }
     }
 }
