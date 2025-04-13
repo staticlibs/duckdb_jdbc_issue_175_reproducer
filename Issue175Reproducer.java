@@ -12,7 +12,7 @@ public class Issue175Reproducer {
     public static void main(String[] args) throws Exception {
         int numCores = Runtime.getRuntime().availableProcessors();
         int numShards = 3;
-        int numRows = 10_000;
+        int numRows = 10_000_000;
         int numConnThreads = numCores;
         int numDbWorkerThreads = numCores;
 
