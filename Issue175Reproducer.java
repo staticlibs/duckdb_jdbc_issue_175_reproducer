@@ -2,8 +2,6 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -44,6 +42,7 @@ public class Issue175Reproducer {
 
     static class HikariConnPool implements TestConnPool {
         final HikariDataSource hikariDataSource;
+        long lastLog = System.currentTimeMillis();
 
         HikariConnPool(String dbPath, int numConnThreads, int numDbWorkerThreads) throws Exception {
             HikariConfig hikariConfig = new HikariConfig();
@@ -58,6 +57,11 @@ public class Issue175Reproducer {
 
         @Override
         public Connection takeConnection() throws Exception {
+            long now = System.currentTimeMillis();
+            if (now > lastLog + 10000) {
+                System.out.println(hikariDataSource.getHikariPoolMXBean().getTotalConnections());
+                lastLog = now;
+            }
             return hikariDataSource.getConnection();
         }
 
@@ -125,9 +129,9 @@ public class Issue175Reproducer {
     public static void main(String[] args) throws Exception {
         int numCores = Runtime.getRuntime().availableProcessors();
         int numShards = 3;
-        int numConnThreads = numCores;
+        int numConnThreads = 10;
         int numDbWorkerThreads = numCores;
-        int numRows = 1_000_000;
+        int numRows = 10_000_000;
 
         System.out.println("CPU cores: " + numCores);
         System.out.println("DB shards: " + numShards);
